@@ -316,5 +316,132 @@ const generateFinancialPlan = async (request, reply) => {
     });
   }
 };
+// Add to your existing auth controller
 
-export { signup, verifyOTP, login, getProfile, resendOTP, onboarding, generateFinancialPlan };
+// Logout (optional - for token blacklisting if needed)
+const logout = async (request, reply) => {
+  // In JWT, logout is typically client-side (token deletion)
+  // But you might want to maintain a blacklist for security
+  reply.send({ message: 'Logged out successfully' });
+};
+
+// Change Password
+const changePassword = async (request, reply) => {
+  const { currentPassword, newPassword } = request.body;
+  const userId = request.userId;
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      return reply.code(404).send({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return reply.code(400).send({ message: 'Current password is incorrect' });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    reply.send({ message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('Change Password Error:', error);
+    reply.code(500).send({ 
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Forgot Password
+const forgotPassword = async (request, reply) => {
+  const { email } = request.body;
+
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      // Don't reveal whether email exists for security
+      return reply.send({ message: 'If email exists, reset instructions sent' });
+    }
+
+    const resetToken = jwt.sign({ id: user._id }, process.env.SECRET_KEY, { 
+      expiresIn: '1h' 
+    });
+    
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    await user.save();
+
+    // Send reset email
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+    const emailSubject = 'Password Reset Request';
+    const emailHtml = `
+      <div>
+        <h2>Password Reset</h2>
+        <p>Click the link below to reset your password:</p>
+        <a href="${resetUrl}">Reset Password</a>
+        <p>This link expires in 1 hour.</p>
+      </div>
+    `;
+
+    await sendEmail(email, emailSubject, '', emailHtml);
+    reply.send({ message: 'If email exists, reset instructions sent' });
+  } catch (error) {
+    console.error('Forgot Password Error:', error);
+    reply.code(500).send({ message: 'Server error' });
+  }
+};
+
+// Reset Password
+const resetPassword = async (request, reply) => {
+  const { token, newPassword } = request.body;
+
+  try {
+    const decoded = jwt.verify(token, process.env.SECRET_KEY);
+    const user = await User.findOne({
+      _id: decoded.id,
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: new Date() }
+    });
+
+    if (!user) {
+      return reply.code(400).send({ message: 'Invalid or expired reset token' });
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    reply.send({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Reset Password Error:', error);
+    reply.code(500).send({ message: 'Invalid or expired reset token' });
+  }
+};
+
+// Update Profile
+const updateProfile = async (request, reply) => {
+  const userId = request.userId;
+  const updateData = request.body;
+
+  try {
+    const user = await User.findByIdAndUpdate(
+      userId, 
+      { $set: updateData }, 
+      { new: true, runValidators: true }
+    ).select('-password -otp -otpExpiry');
+
+    if (!user) {
+      return reply.code(404).send({ message: 'User not found' });
+    }
+
+    reply.send({ message: 'Profile updated successfully', user });
+  } catch (error) {
+    console.error('Update Profile Error:', error);
+    reply.code(500).send({ message: 'Server error' });
+  }
+};
+
+export { signup, verifyOTP, login, getProfile, updateProfile, changePassword, resetPassword, forgotPassword, resendOTP, onboarding, generateFinancialPlan };
